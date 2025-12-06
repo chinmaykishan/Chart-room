@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Green Chat</title>
+
+<style>
+body{
+  background:black;
+  color:#00ff00;
+  font-family:monospace;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  height:100vh;
+}
+.screen{
+  max-width:480px;
+  width:100%;
+  padding:14px;
+}
+#chat{
+  display:none;
+  flex-direction:column;
+}
+input,button{
+  background:black;
+  color:#00ff00;
+  border:1px solid #00ff00;
+  padding:8px;
+}
+button{cursor:pointer}
+.row{
+  display:flex;
+  gap:6px;
+  margin-top:6px;
+}
+#messages{
+  height:45vh;
+  border:1px solid #00ff00;
+  padding:6px;
+  overflow:auto;
+  margin:6px 0;
+  font-size:14px;
+}
+.small{
+  font-size:12px;
+  opacity:.8;
+}
+#adminUsers{
+  display:none;
+  border:1px dashed #00ff00;
+  padding:6px;
+  margin:6px 0;
+  font-size:12px;
+}
+.admin-btn{
+  margin-left:6px;
+  font-size:10px;
+  padding:2px 4px;
+}
+#deleteAllBtn{
+  display:none;
+  margin:4px 0;
+  border-color:red;
+  color:red;
+}
+.msg-line button{
+  font-size:10px;
+  padding:1px 4px;
+  margin-left:4px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- LOGIN -->
+<div id="login" class="screen">
+  <h3>Login</h3>
+  <input id="loginUser" placeholder="username">
+  <input id="loginPass" type="password" placeholder="password" style="margin-top:6px">
+  <div class="row">
+    <button id="loginBtn">LOGIN</button>
+    <button id="showRegister">REGISTER</button>
+  </div>
+</div>
+
+<!-- REGISTER -->
+<div id="register" class="screen" style="display:none">
+  <h3>Register</h3>
+  <input id="regUser" placeholder="username">
+  <input id="regPass" type="password" placeholder="password" style="margin-top:6px">
+  <div class="row">
+    <button id="registerBtn">CREATE</button>
+    <button id="backLogin">BACK</button>
+  </div>
+</div>
+
+<!-- CHAT -->
+<div id="chat" class="screen">
+  <b id="userLabel"></b>
+  <div id="onlineBar" class="small"></div>
+  <div id="typingBar" class="small"></div>
+
+  <!-- 👑 ADMIN ONLY PANEL -->
+  <div id="adminUsers"></div>
+
+  <!-- 👑 ADMIN: DELETE ALL MESSAGES -->
+  <button id="deleteAllBtn">Delete ALL Messages</button>
+
+  <div id="messages"></div>
+
+  <form id="form">
+    <div class="row">
+      <input id="msg" placeholder="type message..." autocomplete="off">
+      <button type="submit">SEND</button>
+    </div>
+  </form>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  serverTimestamp,
+  getDoc,
+  setDoc,
+  doc,
+  onSnapshot,
+  query,
+  orderBy,
+  deleteDoc,
+  getDocs,
+  updateDoc,
+  arrayUnion
+} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+
+/* 🔐 ADMIN USERS */
+const ADMIN_USERS = ["admin"]; // add more admin usernames here if needed
+
+/* 🔧 FIREBASE CONFIG */
+const firebaseConfig = {
+  apiKey: "AIzaSyDVH9psrdeAQQQZBDpbFpchWXs_-JrTsX0",
+  authDomain: "chatttt-40e41.firebaseapp.com",
+  projectId: "chatttt-40e41",
+  appId: "1:733517907714:web:b4196de30faa0e50ef641b"
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+/* 🔗 COLLECTIONS */
+const usersRef  = collection(db, "users");
+const msgRef    = collection(db, "messages");
+const onlineRef = collection(db, "onlineUsers");
+const typingRef = collection(db, "typingUsers");
+
+/* 🌐 DOM ELEMENTS */
+const loginScreen    = document.getElementById("login");
+const registerScreen = document.getElementById("register");
+const chatScreen     = document.getElementById("chat");
+
+const loginUserInput = document.getElementById("loginUser");
+const loginPassInput = document.getElementById("loginPass");
+const regUserInput   = document.getElementById("regUser");
+const regPassInput   = document.getElementById("regPass");
+
+const loginBtn        = document.getElementById("loginBtn");
+const showRegisterBtn = document.getElementById("showRegister");
+const registerBtn     = document.getElementById("registerBtn");
+const backLoginBtn    = document.getElementById("backLogin");
+
+const userLabel     = document.getElementById("userLabel");
+const onlineBar     = document.getElementById("onlineBar");
+const typingBar     = document.getElementById("typingBar");
+const adminUsersDiv = document.getElementById("adminUsers");
+const deleteAllBtn  = document.getElementById("deleteAllBtn");
+
+const messagesDiv = document.getElementById("messages");
+const msgInput    = document.getElementById("msg");
+const form        = document.getElementById("form");
+
+/* 👤 STATE */
+let USER = "";
+let isAdmin = false;
+let cachedUsersSnapshot = null;
+let cachedMessagesSnapshot = null;
+
+/* 🧭 SCREEN NAV */
+showRegisterBtn.onclick = () => {
+  loginScreen.style.display = "none";
+  registerScreen.style.display = "block";
+};
+backLoginBtn.onclick = () => {
+  registerScreen.style.display = "none";
+  loginScreen.style.display = "block";
+};
+
+/* 🆕 REGISTER */
+registerBtn.onclick = async () => {
+  const u = regUserInput.value.trim();
+  const p = regPassInput.value.trim();
+  if (!u || !p) {
+    alert("Fill username and password");
+    return;
+  }
+
+  const userDocRef = doc(usersRef, u);
+  const existing = await getDoc(userDocRef);
+  if (existing.exists()) {
+    alert("User already exists");
+    return;
+  }
+
+  await setDoc(userDocRef, { username: u, password: p });
+  alert("Registered ✅ Now login");
+  regUserInput.value = "";
+  regPassInput.value = "";
+  registerScreen.style.display = "none";
+  loginScreen.style.display = "block";
+};
+
+/* 🔑 LOGIN */
+loginBtn.onclick = async () => {
+  const u = loginUserInput.value.trim();
+  const p = loginPassInput.value.trim();
+  if (!u || !p) {
+    alert("Enter username and password");
+    return;
+  }
+
+  const snap = await getDoc(doc(usersRef, u));
+  if (!snap.exists() || snap.data().password !== p) {
+    alert("Invalid login");
+    return;
+  }
+
+  USER = u;
+  isAdmin = ADMIN_USERS.includes(USER);
+  userLabel.innerText = USER + (isAdmin ? " (admin)" : "");
+
+  loginScreen.style.display    = "none";
+  registerScreen.style.display = "none";
+  chatScreen.style.display     = "flex";
+
+  // start online heartbeat (every 5s)
+  setDoc(doc(onlineRef, USER), { username: USER, time: serverTimestamp() }, { merge: true });
+  setInterval(() => {
+    setDoc(doc(onlineRef, USER), { username: USER, time: serverTimestamp() }, { merge: true });
+  }, 5000);
+
+  // admin-only UI
+  deleteAllBtn.style.display = isAdmin ? "block" : "none";
+  renderAdminUsers();
+  renderMessages();
+};
+
+/* 🟢 ONLINE USERS */
+onSnapshot(onlineRef, snap => {
+  const now = Date.now();
+  const names = [];
+  snap.forEach(d => {
+    const data = d.data();
+    const t = data.time?.toMillis?.() || 0;
+    if (now - t < 10000) {
+      names.push(d.id);
+    }
+  });
+  onlineBar.innerText = "Online: " + (names.length ? names.join(", ") : "none");
+});
+
+/* ✍️ TYPING INDICATOR */
+msgInput.addEventListener("input", () => {
+  if (!USER) return;
+  setDoc(
+    doc(typingRef, USER),
+    { user: USER, time: serverTimestamp() },
+    { merge: true }
+  );
+});
+
+onSnapshot(typingRef, snap => {
+  const now = Date.now();
+  const typers = [];
+  snap.forEach(d => {
+    const data = d.data();
+    const t = data.time?.toMillis?.() || 0;
+    if (now - t < 3000 && data.user !== USER) {
+      typers.push(data.user);
+    }
+  });
+  typingBar.innerText = typers.length ? typers.join(", ") + " typing..." : "";
+});
+
+/* 👑 ADMIN USERS PANEL (with passwords + reset + delete) */
+onSnapshot(usersRef, snap => {
+  cachedUsersSnapshot = snap;
+  renderAdminUsers();
+});
+
+function renderAdminUsers() {
+  if (!isAdmin || !cachedUsersSnapshot) {
+    adminUsersDiv.style.display = "none";
+    adminUsersDiv.innerHTML = "";
+    return;
+  }
+
+  let html = `<b>Registered Users (${cachedUsersSnapshot.size})</b><br>`;
+  cachedUsersSnapshot.forEach(d => {
+    const data = d.data();
+    const u = data.username || d.id;
+    const p = data.password || "";
+    html += `${u} → ${p}
+      <button class="admin-btn reset-pass-btn" data-uid="${u}">Reset</button>
+      <button class="admin-btn delete-user-btn" data-uid="${u}">Delete</button><br>`;
+  });
+
+  adminUsersDiv.style.display = "block";
+  adminUsersDiv.innerHTML = html;
+}
+
+/* 🗑️ ADMIN: DELETE / RESET USER */
+adminUsersDiv.addEventListener("click", async e => {
+  if (!isAdmin) return;
+  const target = e.target;
+  const username = target.getAttribute("data-uid");
+  if (!username) return;
+
+  // reset password
+  if (target.classList.contains("reset-pass-btn")) {
+    const newPass = prompt(`New password for "${username}":`);
+    if (!newPass) return;
+    try {
+      await updateDoc(doc(usersRef, username), { password: newPass });
+      alert("Password updated ✅");
+      if (username === USER) {
+        alert("Your password changed. Use new password next time.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error updating password");
+    }
+  }
+
+  // delete user
+  if (target.classList.contains("delete-user-btn")) {
+    const sure = confirm(`Delete user "${username}"?`);
+    if (!sure) return;
+    try {
+      await deleteDoc(doc(usersRef, username));
+      await deleteDoc(doc(onlineRef, username)).catch(()=>{});
+      await deleteDoc(doc(typingRef, username)).catch(()=>{});
+      if (username === USER) {
+        alert("Your account was deleted. Logging out.");
+        location.reload();
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error deleting user");
+    }
+  }
+});
+
+/* 💬 CHAT MESSAGES + SEEN + ADMIN DELETE */
+onSnapshot(query(msgRef, orderBy("time")), snap => {
+  cachedMessagesSnapshot = snap;
+  renderMessages();
+});
+
+function renderMessages() {
+  if (!cachedMessagesSnapshot) return;
+
+  messagesDiv.innerHTML = "";
+  const seenUpdates = [];
+
+  cachedMessagesSnapshot.forEach(docSnap => {
+    const m = docSnap.data();
+    const id = docSnap.id;
+    const user = m.user || "unknown";
+    const text = m.text || "";
+
+    // time
+    let timeStr = "";
+    if (m.time && m.time.toDate) {
+      const date = m.time.toDate();
+      const hh = String(date.getHours()).padStart(2, "0");
+      const mm = String(date.getMinutes()).padStart(2, "0");
+      timeStr = `${hh}:${mm}`;
+    }
+
+    // seen indicator (for OWN messages only)
+    const seenBy = Array.isArray(m.seenBy) ? m.seenBy : [];
+    let seenText = "";
+    if (user === USER) {
+      seenText = seenBy.length > 1 ? " ✓✓" : " ✓"; // ✓ = sent, ✓✓ = seen by someone else
+    }
+
+    // mark message as seen by current user (for others' messages)
+    if (
+      USER &&
+      user !== USER &&
+      !seenBy.includes(USER)
+    ) {
+      const ref = doc(msgRef, id);
+      seenUpdates.push(
+        updateDoc(ref, { seenBy: arrayUnion(USER) }).catch(err =>
+          console.error("seen update error", err)
+        )
+      );
+    }
+
+    // admin delete button per message
+    let adminBtnHtml = "";
+    if (isAdmin) {
+      adminBtnHtml = ` <button class="msg-del-btn" data-id="${id}">Del</button>`;
+    }
+
+    messagesDiv.innerHTML += `
+      <div class="msg-line">[${timeStr}] ${user}: ${text}${seenText}${adminBtnHtml}</div>
+    `;
+  });
+
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+/* 👑 ADMIN: DELETE SINGLE MESSAGE */
+messagesDiv.addEventListener("click", async e => {
+  const target = e.target;
+  if (!target.classList.contains("msg-del-btn")) return;
+  if (!isAdmin) {
+    alert("Only admin can delete messages");
+    return;
+  }
+  const id = target.getAttribute("data-id");
+  if (!id) return;
+  const sure = confirm("Delete this message?");
+  if (!sure) return;
+  try {
+    await deleteDoc(doc(msgRef, id));
+  } catch (err) {
+    console.error(err);
+    alert("Error deleting message");
+  }
+});
+
+/* 👑 ADMIN: DELETE ALL MESSAGES */
+deleteAllBtn.onclick = async () => {
+  if (!isAdmin) return;
+  const sure = confirm("Delete ALL messages?");
+  if (!sure) return;
+  try {
+    const snap = await getDocs(msgRef);
+    const tasks = [];
+    snap.forEach(d => tasks.push(deleteDoc(d.ref)));
+    await Promise.all(tasks);
+    alert("All messages deleted ✅");
+  } catch (err) {
+    console.error(err);
+    alert("Error deleting all messages");
+  }
+};
+
+/* ⏎ ENTER TO SEND */
+msgInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+/* SEND MESSAGE */
+form.onsubmit = async e => {
+  e.preventDefault();
+  const text = msgInput.value.trim();
+  if (!text || !USER) return;
+
+  await addDoc(msgRef, {
+    user: USER,
+    text,
+    time: serverTimestamp(),
+    seenBy: [USER]      // you have "seen" your own message
+  });
+
+  msgInput.value = "";
+};
+</script>
+</body>
+</html>
